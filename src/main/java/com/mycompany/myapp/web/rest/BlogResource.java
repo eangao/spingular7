@@ -1,31 +1,37 @@
 package com.mycompany.myapp.web.rest;
 
+import com.mycompany.myapp.domain.Appuser;
+import com.mycompany.myapp.repository.AppuserRepository;
 import com.mycompany.myapp.repository.BlogRepository;
+import com.mycompany.myapp.repository.UserRepository;
+import com.mycompany.myapp.security.AuthoritiesConstants;
+import com.mycompany.myapp.security.SecurityUtils;
 import com.mycompany.myapp.service.BlogQueryService;
 import com.mycompany.myapp.service.BlogService;
 import com.mycompany.myapp.service.criteria.BlogCriteria;
 import com.mycompany.myapp.service.dto.BlogDTO;
 import com.mycompany.myapp.web.rest.errors.BadRequestAlertException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
-import javax.validation.Valid;
-import javax.validation.constraints.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
+import tech.jhipster.service.filter.LongFilter;
 import tech.jhipster.web.util.HeaderUtil;
 import tech.jhipster.web.util.PaginationUtil;
 import tech.jhipster.web.util.ResponseUtil;
+
+import javax.validation.Valid;
+import javax.validation.constraints.NotNull;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 
 /**
  * REST controller for managing {@link com.mycompany.myapp.domain.Blog}.
@@ -47,10 +53,17 @@ public class BlogResource {
 
     private final BlogQueryService blogQueryService;
 
-    public BlogResource(BlogService blogService, BlogRepository blogRepository, BlogQueryService blogQueryService) {
+    private final UserRepository userRepository;
+
+    private final AppuserRepository appuserRepository;
+
+
+    public BlogResource(BlogService blogService, BlogRepository blogRepository, BlogQueryService blogQueryService, UserRepository userRepository, AppuserRepository appuserRepository) {
         this.blogService = blogService;
         this.blogRepository = blogRepository;
         this.blogQueryService = blogQueryService;
+        this.userRepository = userRepository;
+        this.appuserRepository = appuserRepository;
     }
 
     /**
@@ -66,7 +79,25 @@ public class BlogResource {
         if (blogDTO.getId() != null) {
             throw new BadRequestAlertException("A new blog cannot already have an ID", ENTITY_NAME, "idexists");
         }
-        BlogDTO result = blogService.save(blogDTO);
+
+        BlogDTO result = new BlogDTO();
+        if(userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).isPresent()){
+            if(SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.USER)){
+                Appuser loggedAppuser = appuserRepository.findByUserId(
+                    userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).get().getId());
+
+                if(blogDTO.getAppuser().getId().equals(loggedAppuser.getId())){
+                    result = blogService.save(blogDTO);
+                    log.debug("Blog DTO to create, belongs to current user: {}", blogDTO.toString());
+                }
+            }
+
+            if(SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.ADMIN)){
+                result = blogService.save(blogDTO);
+                log.debug("Blog DTO to create, belongs to current user: {}", blogDTO.toString());
+            }
+        }
+
         return ResponseEntity
             .created(new URI("/api/blogs/" + result.getId()))
             .headers(HeaderUtil.createEntityCreationAlert(applicationName, true, ENTITY_NAME, result.getId().toString()))
@@ -100,7 +131,24 @@ public class BlogResource {
             throw new BadRequestAlertException("Entity not found", ENTITY_NAME, "idnotfound");
         }
 
-        BlogDTO result = blogService.save(blogDTO);
+        BlogDTO result = blogService.findOne(id).orElse(blogDTO);
+        if (userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).isPresent()) {
+            Appuser appuser = appuserRepository.findByUserId(
+                userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).get().getId()
+            );
+            if (SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.USER)) {
+                if (blogDTO.getAppuser().getId().equals(appuser.getId())) {
+                    result = blogService.save(blogDTO);
+                    log.debug("Blog DTO to update, belongs to current user: {}", blogDTO.toString());
+                }
+            }
+            if (SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.ADMIN)) {
+                result = blogService.save(blogDTO);
+                log.debug("Blog DTO to update, belongs to current user: {}", blogDTO.toString());
+            }
+        }
+
+
         return ResponseEntity
             .ok()
             .headers(HeaderUtil.createEntityUpdateAlert(applicationName, true, ENTITY_NAME, blogDTO.getId().toString()))
@@ -135,7 +183,22 @@ public class BlogResource {
             throw new BadRequestAlertException("Entity not found", ENTITY_NAME, "idnotfound");
         }
 
-        Optional<BlogDTO> result = blogService.partialUpdate(blogDTO);
+        Optional<BlogDTO> result = blogService.findOne(id);
+        if (userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).isPresent()) {
+            Appuser appuser = appuserRepository.findByUserId(
+                userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).get().getId()
+            );
+            if (SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.USER)) {
+                if (blogDTO.getAppuser().getId().equals(appuser.getId())) {
+                    result = blogService.partialUpdate(blogDTO);
+                    log.debug("Blog DTO to partial update, belongs to current user: {}", blogDTO.toString());
+                }
+            }
+            if (SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.ADMIN)) {
+                result = blogService.partialUpdate(blogDTO);
+                log.debug("Blog DTO to partial update, belongs to current user: {}", blogDTO.toString());
+            }
+        }
 
         return ResponseUtil.wrapOrNotFound(
             result,
@@ -153,7 +216,24 @@ public class BlogResource {
     @GetMapping("/blogs")
     public ResponseEntity<List<BlogDTO>> getAllBlogs(BlogCriteria criteria, Pageable pageable) {
         log.debug("REST request to get Blogs by criteria: {}", criteria);
-        Page<BlogDTO> page = blogQueryService.findByCriteria(criteria, pageable);
+
+        Page<BlogDTO> page;
+        if(SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.ADMIN)
+            || SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.USER)){
+
+            BlogCriteria loggedCriteria = new BlogCriteria();
+            LongFilter longFilter = new LongFilter();
+            if(userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).isPresent()){
+                Appuser loggedAppuser = appuserRepository.findByUserId(
+                    userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).get().getId());
+                loggedCriteria.setAppuserId((LongFilter) longFilter.setEquals(loggedAppuser.getId()));
+            }
+            page = blogQueryService.findByCriteria(loggedCriteria, pageable);
+        }else {
+            page = blogQueryService.findByCriteria(criteria, pageable);
+        }
+
+
         HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
         return ResponseEntity.ok().headers(headers).body(page.getContent());
     }
@@ -180,6 +260,8 @@ public class BlogResource {
     public ResponseEntity<BlogDTO> getBlog(@PathVariable Long id) {
         log.debug("REST request to get Blog : {}", id);
         Optional<BlogDTO> blogDTO = blogService.findOne(id);
+
+        // Note: Any visitor can see them all
         return ResponseUtil.wrapOrNotFound(blogDTO);
     }
 
@@ -192,7 +274,24 @@ public class BlogResource {
     @DeleteMapping("/blogs/{id}")
     public ResponseEntity<Void> deleteBlog(@PathVariable Long id) {
         log.debug("REST request to delete Blog : {}", id);
-        blogService.delete(id);
+
+        if (userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).isPresent()) {
+            Appuser loggedAppuser = appuserRepository.findByUserId(
+                userRepository.findOneByLogin(SecurityUtils.getCurrentUserLogin().get()).get().getId()
+            );
+            if (SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.USER)) {
+                BlogDTO blogDTO = blogService.findOne(id).orElse(new BlogDTO());
+                if (blogDTO.getAppuser().getId().equals(loggedAppuser.getId())) {
+                    blogService.delete(id);
+                    log.debug("Blog DTO to delete, belongs to current user: {}", blogDTO.toString());
+                    log.debug("Blog DTO to delete, belongs to Appuser: {}", loggedAppuser.getId());
+                }
+            }
+            if (SecurityUtils.hasCurrentUserThisAuthority(AuthoritiesConstants.ADMIN)) {
+                blogService.delete(id);
+            }
+        }
+
         return ResponseEntity
             .noContent()
             .headers(HeaderUtil.createEntityDeletionAlert(applicationName, true, ENTITY_NAME, id.toString()))
